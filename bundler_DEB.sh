@@ -5,6 +5,10 @@ if [ "$EUID" -ne 0 ]
   exit
 fi
 
+export LANG=en_US.UTF-8
+export LC_ALL=en_US.UTF-8
+
+
 CLEAN=1
 
 while getopts "a:n" opt; do
@@ -28,13 +32,9 @@ if [ ! "$ACCESS_KEY" ]; then
 fi
 
 PKG_URI=packages.instana.io
-YUM_URI="${PKG_URI}/release"
-MACHINE=x86_64
+DEB_URI="${PKG_URI}/release"
 gpg_uri="https://${PKG_URI}/Instana.gpg"
 CUR_DIR=`pwd`
-
-#Pre-req to bundle
-yum install -y createrepo
 
 function get-instana-packages() {
 #This creates the Instana repo file based on access key used to download all required rpm file for back end installation
@@ -46,31 +46,53 @@ function get-instana-packages() {
 # Step 2: prepare env and set list of necessary packages
 # Step 3: Download of all rpm package (this is a point of failure since there is no guarantee this package list will last forever.
 #       With any new major version, new package can appear and therefore list have to be updated
+  REPO_FOLDER=/localrepo/
+  
+  ########## STEP 1 ##########
+  
+  wget -qO - "https://${PKG_URI}/Instana.gpg" | apt-key add
 
-########## STEP 1 ##########
-   echo " * create instana repo file"
-   printf "[instana-product]\nname=Instana-Product\nbaseurl=https://_:"$ACCESS_KEY"@"$YUM_URI"/product/rpm/generic/"$MACHINE"\nenabled=1\ngpgcheck=1\nrepo_gpgcheck=1\ngpgkey="$gpg_uri"\nsslverify=1" >/etc/yum.repos.d/Instana-Product.repo
-   echo " * create local repo file"
-   printf "[rhel7]\nname=rhel7\nbaseurl=file:///localrepo/\nenabled=1\ngpgcheck=0" >$CUR_DIR/local.repo
+  echo " * create instana repo file"
+  printf "deb [arch=amd64] https://_:"$ACCESS_KEY"@"$DEB_URI"/product/deb generic main" >/etc/apt/sources.list.d/Instana-Product.list
+  echo " * update repo list"
+  apt-get update>>/dev/null
+
+  #package required to prepare local repo
+  apt install dpkg-dev apt-rdepends 
+
+   #echo " * create local repo file"
+   #printf "[rhel7]\nname=rhel7\nbaseurl=file:///localrepo/\nenabled=1\ngpgcheck=0" >$CUR_DIR/local.repo
 
 #Step2: Download of all rpm package (this is a point of failure since there is no guarantee this package list will last forever.
 #       With any new major version, new package can appear and therefore list have to be updated
 
 ########## STEP 2 ##########
    echo " * Create local repo folder"
-   mkdir /localrepo/
-   #Array contains all repo
+   mkdir $REPO_FOLDER
+   cd $REPO_FOLDER
+   #to prevent excessive error message
+   chown -R _apt:root $REPO_FOLDER  
 
-   Array=( "cassandra.noarch" "cassandra-migrator.noarch" "cassandra-tools.noarch" "chef-cascade.x86_64" "clickhouse.x86_64" "elastic-migrator.x86_64" "elasticsearch.noarch" "instana-acceptor.noarch" "instana-appdata-legacy-converter.noarch" "instana-appdata-processor.noarch" "instana-appdata-reader.noarch" "instana-appdata-writer.noarch" "instana-butler.noarch" "instana-cashier.noarch" "instana-common.x86_64" "instana-commonap.x86_64" "instana-eum-acceptor.noarch" "instana-filler.noarch" "instana-groundskeeper.noarch" "instana-issue-tracker.noarch" "instana-jre.x86_64" "instana-processor.noarch" "instana-ruby.x86_64" "instana-ui-backend.noarch" "instana-ui-client.noarch" "kafka.noarch" "mason.noarch" "mongodb.x86_64" "nginx.x86_64" "nodejs.x86_64" "onprem-cookbooks.noarch" "postgres-migrator.x86_64" "postgresql.x86_64" "postgresql-libs.x86_64" "postgresql-static.x86_64" "redis.x86_64" "zookeeper.noarch")
+   #Array contains all repo
+   Array=( "instana-acceptor" "instana-appdata-legacy-converter" "instana-appdata-processor" "instana-appdata-reader" "instana-appdata-writer" "instana-butler" "instana-cashier" "instana-common" "instana-commonap" "instana-eum-acceptor" "instana-filler" "instana-groundskeeper" "instana-issue-tracker" "instana-jre" "instana-processor" "instana-ruby" "instana-ui-backend" "instana-ui-client" "elasticsearch" "clickhouse" "redis" "postgresql-static" "postgres-migrator" "cassandra" "cassandra-tools" "kafka" "mason" "mongodb" "mongodb-server" "nodejs" "nginx" "nginx-extras" "zookeeper")
 
 ########## STEP 3 ##########
-  echo " * download list of necessary repos"
-  for item in "${Array[@]}"; do
-     echo "downloading $item"
-     yumdownloader -q "$item" --destdir=/localrepo/
-   done
-
-  echo " * download complete " 
+  #create dependencies list 
+  echo " * buidling dependency list"
+  for item in "${Array[@]}"; do   # The quotes are necessary here
+    apt-rdepends "$item"|grep -v "^ ">>$REPO_FOLDER/dep.list
+  done
+  sort -u $REPO_FOLDER/dep.list > $REPO_FOLDER/dep_sorted.list
+  rm $REPO_FOLDER/dep.list
+  #download dependency packages
+  while read -r line
+  do
+    apt download "$line"
+  done < "$REPO_FOLDER/dep_sorted.list"
+  
+  #restoring legitimate user 
+  chown -R root:root $REPO_FOLDER
+  echo " * download complete "
 
 }
 
@@ -119,7 +141,7 @@ function get-agents() {
   mv $AGENT_DIR/*.rpm $AGENT_DIR/centos
 
 ########## STEP 5 ##########
-  
+
   cd $AGENT_DIR
   tar -czf $CUR_DIR/instana_agent_repo.tar.gz *
 }
@@ -133,23 +155,18 @@ function package-offline() {
 
 
 ########## STEP1 ##########
-  echo " * backup existing repo and prepare local repo"
-  mkdir $CUR_DIR/backup && mv -f /etc/yum.repos.d/* $CUR_DIR/backup
-  cp $CUR_DIR/local.repo /etc/yum.repos.d/
-  createrepo /localrepo/
-
+  #create package repo
+  cd $REPO_FOLDER
+  dpkg-scanpackages . /dev/null | gzip -9c > Packages.gz
+  dpkg-scansources . /dev/null | gzip -9c > Sources.gz
 ########## STEP2 ##########
-  rm -f /etc/yum.repos.d/local.repo
-  cp $CUR_DIR/backup/* /etc/yum.repos.d/
-
-########## STEP3 ##########
   tar -czf $CUR_DIR/instana_backend_repo.tar.gz /localrepo/
 
 ########## STEP5 ##########
   echo " * package everything"
   cd $CUR_DIR
   tar -czf instana_offline.tar.gz instana_backend_repo.tar.gz instana_agent_repo.tar.gz local.repo
-  cat offline.sh instana_offline.tar.gz >instana_setup.sh
+  #cat offline.sh instana_offline.tar.gz >instana_setup.sh
 
 }
 
@@ -168,7 +185,6 @@ function final-cleanup() {
 function create-offline-setup-file() {
 echo " * Create offline setup file"
 
-  sleep 5
   _self="${0##*/}"
   #set file marker
   FILE_MARKER=`awk '/^SETUP FILE:/ { print NR + 1; exit 0; }' $CUR_DIR/$_self`
@@ -181,7 +197,7 @@ echo " * Create offline setup file"
   get-agents
 
   # Prepapre Instana repo and download packages
-  get-instana-packages 
+  get-instana-packages
 
   # create setup file
   create-offline-setup-file
@@ -309,7 +325,7 @@ function get-inputs() {
 function feed-settings() {
 
   # make a fresh copy of settings.yaml in case of reinstall
-  # use /bin/cp rather than just cp which is an alias for cp -i and prevent overwrite without confirmation 
+  # use /bin/cp rather than just cp which is an alias for cp -i and prevent overwrite without confirmation
   /bin/cp -rf /etc/instana/settings.yaml.template /etc/instana/settings.yaml
   sed -i '0,/name:/{s/name:/name: "'$NAME'"/}' /etc/instana/settings.yaml
   sed -i '0,/password:/{s/password:/password: "'$PASS'"/}' /etc/instana/settings.yaml
@@ -346,8 +362,8 @@ function set-repo-local() {
 #Remove common repos and replace them with local repo.
 #Extract necessary packages in /localrepo/
 
-mv -f /etc/yum.repos.d/* /etc/instana/backup
-cp -f $CUR_DIR/local.repo /etc/yum.repos.d/
+mv -f /etc/apt/sources.list /etc/instana/backup
+echo "deb [trusted=yes] file:///localrepo/ localrepo/" > /etc/apt/sources.list
 #prepare repo folder and extract packages
 echo " * extracting repo files *"
 tar -xzf $CUR_DIR/instana_backend_repo.tar.gz --directory /
@@ -450,14 +466,14 @@ else
   echo "Your Name : $NAME"
   echo "Your Email : $EMAIL"
   echo "Data location : $DATA_STORE"
-  echo "Logs location : $LOG_STORE"  
+  echo "Logs location : $LOG_STORE"
 fi
- 
+
 prepare-backend-env
 set-repo-local
 
 ##### install instana-commonap
-yum install -y instana-commonap
+apt-get -y install instana-commonap
 
 feed-settings
 
