@@ -40,4 +40,4 @@ echo `<license_raw` |grep -oP "(?<=window.license = ')(.*)(?=';)" >license
 LIC=`<license`
 URL="https://$SERVER_NAME/ump/$TENANT/$UNIT/license/"
 #echo "$URL?license=$LIC&license=$LIC"
-curl -k -v --cookie cookie --url "$URL?license=$LIC&$LIC" > output.htm
+curl -k -v --cookie cookie --url "$URL?license=$LIC&$license=LIC" > output.htm
