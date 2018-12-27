@@ -7,7 +7,7 @@ They have been tested on RHEL 7.5 and Ubuntu 16.04.
 The 2 files share 90% of similar code, so there are areas of improvement to make a single file that can execute on both types of distribution. 
 
 The bundler will create a self extractable package. 
-To generate the package, you just need an agent key and run : 
+To generate the package, you just need an agent key (from a valid on-premise license) and run : 
 ./bundler_RHEL.sh -a <agent-key>
 or 
 ./bundler_DEB.sh -a <agent-key>
