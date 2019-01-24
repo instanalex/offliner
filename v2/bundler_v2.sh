@@ -1,3 +1,22 @@
+######################################################################################
+# Bundler for offline Instana installation 
+#   by Alexandre MECHAIN - Instana
+#
+# This script will generate a self extractable file with all required packages to
+# install Instana AP fully offline I
+#
+# You must run this script on Centos/RHEL to create a bundle for that environment
+# You must run this script on Debian/Ubuntu to create a bundle for that environment
+# You must have an internet connection to run that script
+# You must have a valid agent key to create the bundle (doesn't need to be the final 
+#  one form your customer license
+#  
+# As root run ./bundler_v2.sh -a <agent-key>
+# This will generate an approx. 3Gb file called instana_setup.sh
+# 
+# For any questions please send an email to : alex.mechain@instana.com
+######################################################################################
+
 set -o pipefail
 export LC_ALL=C
 
