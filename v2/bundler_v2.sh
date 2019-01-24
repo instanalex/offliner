@@ -1,4 +1,5 @@
 set -o pipefail
+export LC_ALL=C
 
 PLATFORM="unknown"
 DISTRO="unknown"
@@ -69,6 +70,10 @@ while getopts "a:n" opt; do
   esac
 done
 
+echo "detected Linux Distribution: $DISTRO"
+echo "setting family to $FAMILY"
+
+
 if [ ! "$ACCESS_KEY" ]; then
   echo "-a ACCES_KEY required!"
   exit 1
@@ -105,14 +110,24 @@ if [ "$family" = "yum" ]; then
   echo " * create local repo file"
   printf "[rhel7]\nname=rhel7\nbaseurl=file:///localrepo/\nenabled=1\ngpgcheck=0" >$CUR_DIR/local.repo
 
-  yum list | grep instana-product | awk '{print $1}' > $CUR_DIR/list_package
+# This doesn't work with build 145. Some items are "void" when displaying list of instana packages
+#  yum list | grep instana-product | awk '{print $1}' > $CUR_DIR/list_package
+#  echo "nginx">>list_package
+
+# Workaround: feeding list_package with arbitrary list of required packages
+# this list might nor work for further releases.
+Array=( "cassandra.noarch" "cassandra-migrator.noarch" "cassandra-tools.noarch" "chef-cascade.x86_64" "clickhouse.x86_64" "elastic-migrator.x86_64" "elasticsearch.noarch" "instana-acceptor.noarch" "instana-appdata-legacy-converter.noarch" "instana-appdata-processor.noarch" "instana-appdata-reader.noarch" "instana-appdata-writer.noarch" "instana-butler.noarch" "instana-cashier.noarch" "instana-common.x86_64" "instana-commonap.x86_64" "instana-eum-acceptor.noarch" "instana-filler.noarch" "instana-groundskeeper.noarch" "instana-issue-tracker.noarch" "instana-jre.x86_64" "instana-processor.noarch" "instana-ruby.x86_64" "instana-ui-backend.noarch" "instana-ui-client.noarch" "kafka.noarch" "mason.noarch" "mongodb.x86_64" "nginx.x86_64" "nodejs.x86_64" "onprem-cookbooks.noarch" "postgres-migrator.x86_64" "postgresql.x86_64" "postgresql-libs.x86_64" "postgresql-static.x86_64" "redis.x86_64" "zookeeper.noarch")
+  for item in "${Array[@]}"; do
+    echo "$item" >>list_package
+  done
+# End of Workaround
 
   ########## STEP 3 ##########
   echo " * download list of necessary repos"
   #V2 change
   while read -r line; do
        echo "downloading $line"
-       yumdownloader -q "line" --destdir=/localrepo/
+       yumdownloader -q "$line" --destdir=/localrepo/
   done < $CUR_DIR/list_package
 
 else
@@ -297,6 +312,7 @@ FILE_MARKER=`awk '/^TAR FILE:/ { print NR + 1; exit 0; }' $_self`
 tail -n+$FILE_MARKER $_self  > ./instana_offline.tar.gz
 
 #######End of self extraction#########
+export LC_ALL=C
 PLATFORM="unknown"
 DISTRO="unknown"
 
@@ -514,7 +530,7 @@ sed -i 's/location \/ump\//location \/agent-setup {\n    autoindex on;\n  }\n\n 
 printf "#!/bin/bash\n\nif [ \"\$EUID\" -ne 0 ]\n  then echo \"Please run as root\"\n  exit\nfi\n\nwhile getopts \"z:\" opt; do\n  case \$opt in\n    z)\n      ZONE="\$OPTARG"\n      ;;\n    \?)\n      echo \"Invalid option: -\$OPTARG\" >&2\n      exit 1\n      ;;\n  esac\ndone\n\nif [ ! \"\$ZONE\" ]; then\n  echo \"please provide a zone using -z option\"\n  echo \"syntax: instana_static_agent_<DISTRO>.sh -z <zone-name>\"\n  exit 1\nfi\nSERVER_NAME=$SERVER_NAME\nACCESS_KEY=$ACCESS_KEY\n_self=\"\${0##*/}\"\n\n#set file marker and create tmp dir\nCUR_DIR=\`pwd\`\nFILE_MARKER=\`awk '/^RPM FILE:/ { print NR + 1; exit 0; }' \$CUR_DIR/\$_self\`\nTMP_DIR=\`mktemp -d /tmp/instana-self-extract.XXXXXX\`\n\n# Extract the file using pipe\ntail -n+\$FILE_MARKER \$CUR_DIR/\$_self  > \$TMP_DIR/setup.rpm\n\n#Install the agent\necho \" *** installing agent ***\"\nrpm --quiet -i \$TMP_DIR/setup.rpm\n\n# configure agent\necho \" *** configure agent ***\"\n# create a fresh copy of Backend.cfg file\ncp /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg.template /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\n# set appropriate values\nsed -i -e 's/host=\${env:INSTANA_HOST}/host='\$SERVER_NAME'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/port=\${env:INSTANA_PORT}/port=1444/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/key=\${env:INSTANA_KEY}/key='\$ACCESS_KEY'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i 's/#com.instana.plugin.generic.hardware:/com.instana.plugin.generic.hardware:/' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i '0,/#  enabled: true/{s/#  enabled: true/  enabled: true/}' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i \"s@#  availability-zone: 'Datacenter A / Rack 42'@  availability-zone: '\$ZONE'@\" /opt/instana/agent/etc/instana/configuration.yaml\n\n#restart agent\nsystemctl restart instana-agent\n\nexit 0\n\nRPM FILE:\n">$AGENT_DIR/setup_RPM.sh
 
 #Too lazy to make a distro control so creating 2nd file for debian distro
-printf "#!/bin/bash\n\nif [ \"\$EUID\" -ne 0 ]\n  then echo \"Please run as root\"\n  exit\nfi\n\nwhile getopts \"z:\" opt; do\n  case \$opt in\n    z)\n      ZONE="\$OPTARG"\n      ;;\n    \?)\n      echo \"Invalid option: -\$OPTARG\" >&2\n      exit 1\n      ;;\n  esac\ndone\n\nif [ ! \"\$ZONE\" ]; then\n  echo \"please provide a zone using -z option\"\n  echo \"syntax: instana_static_agent_<DISTRO>.sh -z <zone-name>\"\n  exit 1\nfi\nSERVER_NAME=$SERVER_NAME\nACCESS_KEY=$ACCESS_KEY\n_self=\"\${0##*/}\"\n\n#set file marker and create tmp dir\nCUR_DIR=\`pwd\`\nFILE_MARKER=\`awk '/^RPM FILE:/ { print NR + 1; exit 0; }' \$CUR_DIR/\$_self\`\nTMP_DIR=\`mktemp -d /tmp/instana-self-extract.XXXXXX\`\n\n# Extract the file using pipe\ntail -n+\$FILE_MARKER \$CUR_DIR/\$_self  > \$TMP_DIR/setup.deb\n\n#Install the agent\necho \" *** installing agent ***\"\napt -qq \$TMP_DIR/setup.deb\n\n# configure agent\necho \" *** configure agent ***\"\n# create a fresh copy of Backend.cfg file\ncp /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg.template /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\n# set appropriate values\nsed -i -e 's/host=\${env:INSTANA_HOST}/host='\$SERVER_NAME'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/port=\${env:INSTANA_PORT}/port=1444/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/key=\${env:INSTANA_KEY}/key='\$ACCESS_KEY'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i 's/#com.instana.plugin.generic.hardware:/com.instana.plugin.generic.hardware:/' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i '0,/#  enabled: true/{s/#  enabled: true/  enabled: true/}' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i \"s@#  availability-zone: 'Datacenter A / Rack 42'@  availability-zone: '\$ZONE'@\" /opt/instana/agent/etc/instana/configuration.yaml\n\n#restart agent\nsystemctl restart instana-agent\n\nexit 0\n\nRPM FILE:\n">$AGENT_DIR/setup_DEB.sh
+printf "#!/bin/bash\n\nif [ \"\$EUID\" -ne 0 ]\n  then echo \"Please run as root\"\n  exit\nfi\n\nwhile getopts \"z:\" opt; do\n  case \$opt in\n    z)\n      ZONE="\$OPTARG"\n      ;;\n    \?)\n      echo \"Invalid option: -\$OPTARG\" >&2\n      exit 1\n      ;;\n  esac\ndone\n\nif [ ! \"\$ZONE\" ]; then\n  echo \"please provide a zone using -z option\"\n  echo \"syntax: instana_static_agent_<DISTRO>.sh -z <zone-name>\"\n  exit 1\nfi\nSERVER_NAME=$SERVER_NAME\nACCESS_KEY=$ACCESS_KEY\n_self=\"\${0##*/}\"\n\n#set file marker and create tmp dir\nCUR_DIR=\`pwd\`\nFILE_MARKER=\`awk '/^RPM FILE:/ { print NR + 1; exit 0; }' \$CUR_DIR/\$_self\`\nTMP_DIR=\`mktemp -d /tmp/instana-self-extract.XXXXXX\`\n\n# Extract the file using pipe\ntail -n+\$FILE_MARKER \$CUR_DIR/\$_self  > \$TMP_DIR/setup.deb\n\n#Install the agent\necho \" *** installing agent ***\"\napt install -q \$TMP_DIR/setup.deb\n\n# configure agent\necho \" *** configure agent ***\"\n# create a fresh copy of Backend.cfg file\ncp /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg.template /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\n# set appropriate values\nsed -i -e 's/host=\${env:INSTANA_HOST}/host='\$SERVER_NAME'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/port=\${env:INSTANA_PORT}/port=1444/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i -e 's/key=\${env:INSTANA_KEY}/key='\$ACCESS_KEY'/' /opt/instana/agent/etc/instana/com.instana.agent.main.sender.Backend.cfg\nsed -i 's/#com.instana.plugin.generic.hardware:/com.instana.plugin.generic.hardware:/' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i '0,/#  enabled: true/{s/#  enabled: true/  enabled: true/}' /opt/instana/agent/etc/instana/configuration.yaml\nsed -i \"s@#  availability-zone: 'Datacenter A / Rack 42'@  availability-zone: '\$ZONE'@\" /opt/instana/agent/etc/instana/configuration.yaml\n\n#restart agent\nsystemctl restart instana-agent\n\nexit 0\n\nRPM FILE:\n">$AGENT_DIR/setup_DEB.sh
 
 ########## STEP 4 ##########
 
