@@ -4,9 +4,7 @@ echo " *   For Installation: $0 -i [optional -f <varfile>]"
 echo " *   For Update: $0 -u"
 }
 
-if [ ! "$1" ]; then
-usage
-fi
+[ $# -eq 0 ] && usage
 
 while getopts "iuf:" opt; do
   case $opt in
