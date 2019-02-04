@@ -5,3 +5,6 @@ rm -f /etc/systemd/system/redis.service
 rm -Rf /etc/systemd/system/multi-user.target.wants/elasticsearch.service
 rm -Rf /usr/share/elasticsearch
 rm -Rf /etc/elasticsearch
+rm -Rf /etc/instana
+#this might be changed according to your settings
+rm -Rf /mnt/data /mnt/logs
